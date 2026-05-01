@@ -1,41 +1,68 @@
-name: Temporary Ubuntu Server (SSH via tmate)
+name: Temporary Ubuntu Server via Ngrok
 
 on:
   workflow_dispatch:
 
 jobs:
-  ubuntu-server:
+  ssh-server:
     runs-on: ubuntu-latest
     timeout-minutes: 360   # 6 hours
 
     steps:
-      - name: Set up SSH server (optional, but nice to have)
+      - name: Generate SSH password
+        run: |
+          PASSWORD=$(openssl rand -base64 16)
+          echo "runner:${PASSWORD}" | sudo chpasswd
+          echo "SSH_PASSWORD=$PASSWORD" >> $GITHUB_ENV
+
+      - name: Install and start SSH server
         run: |
           sudo apt-get update
           sudo apt-get install -y openssh-server
+          sudo systemctl enable ssh
           sudo systemctl start ssh
-          # Set a password for the runner user (you'll use it only for scp etc., not for tmate)
-          echo "runner:$(openssl rand -base64 12)" | sudo chpasswd
 
-      - name: Install tmate
+      - name: Install ngrok
         run: |
-          sudo apt-get install -y tmate
+          curl -s https://bin.equinox.io/c/bNyj1mQVY4c/ngrok-v3-stable-linux-amd64.tgz -o ngrok.tgz
+          tar -xzf ngrok.tgz
+          sudo mv ngrok /usr/local/bin/
+          ngrok version
 
-      - name: Start tmate session
+      - name: Authenticate ngrok
+        env:
+          NGROK_AUTH_TOKEN: ${{ secrets.NGROK_AUTH_TOKEN }}
+        run: ngrok config add-authtoken $NGROK_AUTH_TOKEN
+
+      - name: Start ngrok TCP tunnel for SSH
         run: |
-          tmate -S /tmp/tmate.sock new-session -d
-          tmate -S /tmp/tmate.sock wait tmate-ready
+          ngrok tcp 22 --log=stdout > /dev/null &
+          sleep 5
+          # Fetch public address from the local ngrok API
+          TUNNEL_INFO=$(curl -s localhost:4040/api/tunnels)
+          NGROK_URL=$(echo "$TUNNEL_INFO" | jq -r '.tunnels[0].public_url')
+          NGROK_HOST=$(echo "$NGROK_URL" | sed 's|tcp://||')
+          echo "NGROK_HOST=$NGROK_HOST" >> $GITHUB_ENV
+
+      - name: Print SSH command and password
+        run: |
+          echo ""
           echo "============================================"
-          echo "  🖥️  Temporary Ubuntu Server is ready!"
-          echo "  👤 User: runner (sudo available)"
-          echo "  🔗 Connect via tmate:"
-          echo ""
-          tmate -S /tmp/tmate.sock display -p '#{tmate_ssh}'
-          echo ""
-          tmate -S /tmp/tmate.sock display -p '#{tmate_web}'
-          echo ""
-          echo "  (Copy the SSH line above and paste it in your terminal)"
-          echo "  ⏰ Session will stay alive for up to 6 hours."
+          echo "  🖥️  Ubuntu Server Ready (6 hours max)"
           echo "============================================"
-          # Keep the workflow alive
+          echo ""
+          echo "  SSH command:"
+          echo "    ssh -o StrictHostKeyChecking=no runner@${{ env.NGROK_HOST }}"
+          echo ""
+          echo "  Password: ${{ env.SSH_PASSWORD }}"
+          echo ""
+          echo "  After login, install 3x-ui with:"
+          echo "    curl -Ls https://raw.githubusercontent.com/mhsanaei/3x-ui/master/install.sh -o install.sh"
+          echo "    echo '' | sudo bash install.sh"
+          echo ""
+          echo "  To access the panel in your browser, use port forwarding:"
+          echo "    ssh -o StrictHostKeyChecking=no -L 8443:localhost:2053 runner@${{ env.NGROK_HOST }}"
+          echo "    Then visit https://localhost:8443 (accept self-signed cert)"
+          echo "============================================"
+          # Keep the job alive
           tail -f /dev/null
