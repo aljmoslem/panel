@@ -1,26 +1,29 @@
-name: Temporary Ubuntu Server (SSH via Cloudflare Tunnel)
+name: Install & Host 3x-ui Panel (Web Access)
 
 on:
-  workflow_dispatch:
+  workflow_dispatch:   # manual trigger
 
 jobs:
-  ssh-server:
+  panel:
     runs-on: ubuntu-latest
-    timeout-minutes: 360
+    timeout-minutes: 360   # up to 6 hours
 
     steps:
-      - name: Generate SSH password
+      - name: Generate random password
         run: |
-          PASSWORD=$(openssl rand -base64 16)
-          echo "runner:${PASSWORD}" | sudo chpasswd
-          echo "SSH_PASSWORD=$PASSWORD" >> $GITHUB_ENV
+          echo "PANEL_USER=admin" >> $GITHUB_ENV
+          echo "PANEL_PASS=$(openssl rand -base64 12)" >> $GITHUB_ENV
 
-      - name: Install & start SSH server
+      - name: Install 3x-ui
         run: |
-          sudo apt-get update
-          sudo apt-get install -y openssh-server
-          sudo systemctl enable ssh
-          sudo systemctl start ssh
+          curl -Ls https://raw.githubusercontent.com/mhsanaei/3x-ui/master/install.sh -o install.sh
+          echo "" | sudo bash install.sh
+
+      - name: Set custom password
+        run: |
+          # default port is 2053, change if you want
+          sudo /usr/local/x-ui/x-ui setting -username admin -password "$PANEL_PASS"
+          echo "Panel credentials set."
 
       - name: Install cloudflared (no account needed)
         run: |
@@ -28,50 +31,32 @@ jobs:
           chmod +x cloudflared
           sudo mv cloudflared /usr/local/bin/
 
-      - name: Create TCP tunnel for SSH
+      - name: Expose panel via temporary Cloudflare Tunnel
         run: |
-          cloudflared tunnel --url tcp://localhost:22 > tunnel.log 2>&1 &
-          echo "Waiting for tunnel to come up..."
-          # wait until the log contains the tcp:// address
+          # Panel runs on port 2053 by default
+          cloudflared tunnel --url http://localhost:2053 > tunnel.log 2>&1 &
+          # Wait for the tunnel to be ready
           for i in {1..30}; do
-            if grep -q 'tcp://' tunnel.log; then
+            if grep -q 'trycloudflare.com' tunnel.log; then
               break
             fi
             sleep 1
           done
-          # extract the tcp://host:port line
-          TUNNEL_ADDR=$(grep -o 'tcp://[^[:space:]]*' tunnel.log | head -1 | sed 's/tcp:\/\///')
-          if [ -z "$TUNNEL_ADDR" ]; then
-            echo "❌ Failed to get tunnel address. Log:"
+          PANEL_URL=$(grep -o 'https://[^ ]*\.trycloudflare\.com' tunnel.log | head -1)
+          if [ -z "$PANEL_URL" ]; then
+            echo "❌ Failed to start tunnel. Log:"
             cat tunnel.log
             exit 1
           fi
-          echo "SSH_HOST=$TUNNEL_ADDR" >> $GITHUB_ENV
-          echo "✅ Tunnel ready: $TUNNEL_ADDR"
-
-      - name: Print SSH command
-        run: |
           echo ""
           echo "============================================"
-          echo "  🖥️  Ubuntu Server Ready (6 hours max)"
+          echo "  3x-ui Panel is LIVE (up to 6 hours)"
           echo "============================================"
+          echo "  🔗 URL:      $PANEL_URL"
+          echo "  👤 Username: admin"
+          echo "  🔑 Password: ${{ env.PANEL_PASS }}"
           echo ""
-          echo "  🔑 Password: ${{ env.SSH_PASSWORD }}"
-          echo "  🔗 Connect via SSH:"
-          echo ""
-          echo "      ssh -o StrictHostKeyChecking=no runner@${{ env.SSH_HOST }}"
-          echo ""
-          echo "  (The host part contains the domain and port,"
-          echo "   e.g. sticky-ocean-42.trycloudflare.com:12345)"
-          echo ""
-          echo "  Once logged in, install 3x-ui:"
-          echo "      curl -Ls https://raw.githubusercontent.com/mhsanaei/3x-ui/master/install.sh -o install.sh"
-          echo "      echo '' | sudo bash install.sh"
-          echo ""
-          echo "  To reach the panel in your browser,"
-          echo "  add port forwarding to your SSH command:"
-          echo "      ssh -o StrictHostKeyChecking=no -L 8443:localhost:2053 runner@${{ env.SSH_HOST }}"
-          echo "      Then open https://localhost:8443 (accept the self-signed cert)"
+          echo "  (Copy the URL and open it in your browser)"
           echo "============================================"
-          # Keep job alive so the tunnel stays open
+          # Keep the tunnel alive
           tail -f /dev/null
