@@ -1,62 +1,13 @@
-name: Install & Host 3x-ui Panel (Web Access)
+name: Run 3x-ui Install Script
 
 on:
-  workflow_dispatch:   # manual trigger
+  workflow_dispatch:
 
 jobs:
-  panel:
+  install:
     runs-on: ubuntu-latest
-    timeout-minutes: 360   # up to 6 hours
-
     steps:
-      - name: Generate random password
-        run: |
-          echo "PANEL_USER=admin" >> $GITHUB_ENV
-          echo "PANEL_PASS=$(openssl rand -base64 12)" >> $GITHUB_ENV
-
       - name: Install 3x-ui
         run: |
           curl -Ls https://raw.githubusercontent.com/mhsanaei/3x-ui/master/install.sh -o install.sh
           echo "" | sudo bash install.sh
-
-      - name: Set custom password
-        run: |
-          # default port is 2053, change if you want
-          sudo /usr/local/x-ui/x-ui setting -username admin -password "$PANEL_PASS"
-          echo "Panel credentials set."
-
-      - name: Install cloudflared (no account needed)
-        run: |
-          curl -L -o cloudflared https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64
-          chmod +x cloudflared
-          sudo mv cloudflared /usr/local/bin/
-
-      - name: Expose panel via temporary Cloudflare Tunnel
-        run: |
-          # Panel runs on port 2053 by default
-          cloudflared tunnel --url http://localhost:2053 > tunnel.log 2>&1 &
-          # Wait for the tunnel to be ready
-          for i in {1..30}; do
-            if grep -q 'trycloudflare.com' tunnel.log; then
-              break
-            fi
-            sleep 1
-          done
-          PANEL_URL=$(grep -o 'https://[^ ]*\.trycloudflare\.com' tunnel.log | head -1)
-          if [ -z "$PANEL_URL" ]; then
-            echo "❌ Failed to start tunnel. Log:"
-            cat tunnel.log
-            exit 1
-          fi
-          echo ""
-          echo "============================================"
-          echo "  3x-ui Panel is LIVE (up to 6 hours)"
-          echo "============================================"
-          echo "  🔗 URL:      $PANEL_URL"
-          echo "  👤 Username: admin"
-          echo "  🔑 Password: ${{ env.PANEL_PASS }}"
-          echo ""
-          echo "  (Copy the URL and open it in your browser)"
-          echo "============================================"
-          # Keep the tunnel alive
-          tail -f /dev/null
