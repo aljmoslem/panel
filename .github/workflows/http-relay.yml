@@ -1,13 +1,33 @@
-name: Run 3x-ui Install Script
+name: Install 3x-ui and Keep Alive 6h
 
 on:
   workflow_dispatch:
 
 jobs:
-  install:
+  panel:
     runs-on: ubuntu-latest
+    timeout-minutes: 360   # will be killed after 6 hours
+
     steps:
       - name: Install 3x-ui
         run: |
           curl -Ls https://raw.githubusercontent.com/mhsanaei/3x-ui/master/install.sh -o install.sh
           echo "" | sudo bash install.sh
+
+      - name: Ensure panel is running
+        run: |
+          # systemctl is not available – start the binary directly
+          sudo systemctl stop x-ui 2>/dev/null || true
+          sudo nohup /usr/local/x-ui/x-ui > /tmp/x-ui.log 2>&1 &
+          sleep 3
+          if ss -tlnp | grep -q ':2053'; then
+            echo "✅ Panel is running on port 2053 (locally only)"
+          else
+            echo "⚠️ Panel may not have started – check /tmp/x-ui.log"
+          fi
+
+      - name: Keep alive (6 hours)
+        run: |
+          echo "The panel will remain running until this job times out in 6 hours."
+          echo "You can cancel the workflow at any time."
+          tail -f /dev/null
