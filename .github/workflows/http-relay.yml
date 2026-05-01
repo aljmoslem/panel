@@ -1,69 +1,41 @@
-name: Create SSH Server for Manual 3x-ui Installation
+name: Temporary Ubuntu Server (SSH via tmate)
 
 on:
   workflow_dispatch:
 
 jobs:
-  ssh-server:
+  ubuntu-server:
     runs-on: ubuntu-latest
-    timeout-minutes: 360   # 6 hours max
+    timeout-minutes: 360   # 6 hours
 
     steps:
-      - name: Set random password for runner user
+      - name: Set up SSH server (optional, but nice to have)
         run: |
-          PASSWORD=$(openssl rand -base64 16)
-          echo "runner:${PASSWORD}" | sudo chpasswd
-          echo "SSH_PASSWORD=$PASSWORD" >> $GITHUB_ENV
-          echo "🔐 SSH password generated"
-
-      - name: Ensure SSH server is running
-        run: |
-          sudo systemctl enable ssh
+          sudo apt-get update
+          sudo apt-get install -y openssh-server
           sudo systemctl start ssh
-          sudo ufw allow ssh 2>/dev/null || true
+          # Set a password for the runner user (you'll use it only for scp etc., not for tmate)
+          echo "runner:$(openssl rand -base64 12)" | sudo chpasswd
 
-      - name: Install cloudflared
+      - name: Install tmate
         run: |
-          curl -L -o cloudflared https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64
-          chmod +x cloudflared
-          sudo mv cloudflared /usr/local/bin/
+          sudo apt-get install -y tmate
 
-      - name: Expose SSH via Cloudflare Tunnel
+      - name: Start tmate session
         run: |
-          cloudflared tunnel --url ssh://localhost:22 > cloudflared.log 2>&1 &
-          sleep 10
-          # Extract the hostname from the tunnel output
-          TUNNEL_HOST=$(grep -o 'trycloudflare\.com' cloudflared.log | head -1)
-          # Actually we need the full hostname, try more robust extraction
-          TUNNEL_ADDR=$(grep -o '[a-zA-Z0-9.-]*\.trycloudflare\.com' cloudflared.log | head -1)
-          if [ -z "$TUNNEL_ADDR" ]; then
-            echo "❌ Failed to get tunnel host. Log:"
-            cat cloudflared.log
-            exit 1
-          fi
-          echo "SSH_HOST=$TUNNEL_ADDR" >> $GITHUB_ENV
-          echo "✅ Tunnel ready: $TUNNEL_ADDR"
-
-      - name: Print connection instructions
-        run: |
-          echo ""
+          tmate -S /tmp/tmate.sock new-session -d
+          tmate -S /tmp/tmate.sock wait tmate-ready
           echo "============================================"
-          echo "  🐧 Temporary SSH Server Ready!"
+          echo "  🖥️  Temporary Ubuntu Server is ready!"
+          echo "  👤 User: runner (sudo available)"
+          echo "  🔗 Connect via tmate:"
+          echo ""
+          tmate -S /tmp/tmate.sock display -p '#{tmate_ssh}'
+          echo ""
+          tmate -S /tmp/tmate.sock display -p '#{tmate_web}'
+          echo ""
+          echo "  (Copy the SSH line above and paste it in your terminal)"
+          echo "  ⏰ Session will stay alive for up to 6 hours."
           echo "============================================"
-          echo ""
-          echo "  🔗 SSH command:"
-          echo "    ssh -o StrictHostKeyChecking=no runner@${{ env.SSH_HOST }}"
-          echo ""
-          echo "  🔑 Password:"
-          echo "    ${{ env.SSH_PASSWORD }}"
-          echo ""
-          echo "  ⏰ This server will die after 6 hours."
-          echo "    You can now install 3x-ui manually."
-          echo ""
-          echo "  Recommended install commands after logging in:"
-          echo "    curl -Ls https://raw.githubusercontent.com/mhsanaei/3x-ui/master/install.sh -o install.sh"
-          echo "    echo '' | sudo bash install.sh"
-          echo ""
-          echo "============================================"
-          # Keep job alive so the tunnel stays open
+          # Keep the workflow alive
           tail -f /dev/null
